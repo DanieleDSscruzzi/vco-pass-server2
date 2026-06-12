@@ -40,14 +40,16 @@ function caricaCertificati() {
 }
 
 let CERTIFICATI;
+let CERT_ERROR = null;
 try {
     CERTIFICATI = caricaCertificati();
     console.log("Certificati caricati dal .p12 con successo.");
 } catch (e) {
+    CERT_ERROR = e.message;
     console.error("ERRORE caricamento certificati:", e.message);
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, certs: !!CERTIFICATI }));
+app.get("/health", (req, res) => res.json({ ok: true, certs: !!CERTIFICATI, error: CERT_ERROR }));
 
 app.post("/genera-pass", async (req, res) => {
     try {
