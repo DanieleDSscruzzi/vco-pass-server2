@@ -11,6 +11,7 @@
   "description": "",
   "dependencies": {
     "express": "^5.2.1",
+    "node-forge": "^1.4.0",
     "passkit-generator": "^3.5.7"
   }
 }
