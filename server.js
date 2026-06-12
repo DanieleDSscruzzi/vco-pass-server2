@@ -2,18 +2,59 @@ const express = require("express");
 const { PKPass } = require("passkit-generator");
 const fs = require("fs");
 const path = require("path");
+const forge = require("node-forge");
 
 const app = express();
 app.use(express.json());
 
 const PASS_TYPE_ID = "pass.com.byds.vcotrasporti";
 const TEAM_ID      = "S6C4FQLMT5";
-const P12_PASSWORD = "vcotrasporti";
+const P12_PASSWORD = process.env.P12_PASSWORD || "vcotrasporti";
 
-app.get("/health", (req, res) => res.json({ ok: true }));
+// --- Certificati: estrae signerCert + signerKey (PEM) dal .p12 una sola volta ---
+// passkit-generator NON accetta il .p12 grezzo: vuole certificato e chiave in PEM.
+// node-forge li estrae dal VCOPassCertificate.p12 che hai già nel repo.
+function caricaCertificati() {
+    const p12Buffer = fs.readFileSync(path.join(__dirname, "certs", "VCOPassCertificate.p12"));
+    const p12Asn1 = forge.asn1.fromDer(forge.util.createBuffer(p12Buffer.toString("binary")));
+    const p12 = forge.pkcs12.pkcs12FromAsn1(p12Asn1, P12_PASSWORD);
+
+    const certBags = p12.getBags({ bagType: forge.pki.oids.certBag })[forge.pki.oids.certBag];
+    if (!certBags || !certBags.length) throw new Error("Nessun certificato nel .p12");
+    const signerCert = forge.pki.certificateToPem(certBags[0].cert);
+
+    let keyBags = p12.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag })[forge.pki.oids.pkcs8ShroudedKeyBag];
+    if (!keyBags || !keyBags.length) {
+        keyBags = p12.getBags({ bagType: forge.pki.oids.keyBag })[forge.pki.oids.keyBag];
+    }
+    if (!keyBags || !keyBags.length) throw new Error("Nessuna chiave privata nel .p12");
+    const KEY_PASS = "vco-internal-key-pass";
+    const signerKey = forge.pki.encryptRsaPrivateKey(keyBags[0].key, KEY_PASS);
+
+    return {
+        wwdr:                fs.readFileSync(path.join(__dirname, "certs", "wwdr.pem")),
+        signerCert,
+        signerKey,
+        signerKeyPassphrase: KEY_PASS,
+    };
+}
+
+let CERTIFICATI;
+try {
+    CERTIFICATI = caricaCertificati();
+    console.log("Certificati caricati dal .p12 con successo.");
+} catch (e) {
+    console.error("ERRORE caricamento certificati:", e.message);
+}
+
+app.get("/health", (req, res) => res.json({ ok: true, certs: !!CERTIFICATI }));
 
 app.post("/genera-pass", async (req, res) => {
     try {
+        if (!CERTIFICATI) {
+            return res.status(500).json({ error: "Certificati non disponibili sul server" });
+        }
+
         const { ticketId, tariffa, prezzo, qrCode, validoFino } = req.body;
 
         if (!ticketId || !tariffa || !qrCode || !validoFino) {
@@ -22,60 +63,60 @@ app.post("/genera-pass", async (req, res) => {
 
         const expiry = new Date(validoFino);
 
+        // Buffer Model: pass.json costruito con il TIPO ("generic") già dentro.
+        // È questo che evita "Cannot proceed creating the pass because type is missing".
+        const passJson = {
+            formatVersion:      1,
+            passTypeIdentifier: PASS_TYPE_ID,
+            serialNumber:       String(ticketId),
+            teamIdentifier:     TEAM_ID,
+            organizationName:   "VCO Trasporti",
+            description:        "Biglietto VCO Trasporti",
+            logoText:           "VCO Trasporti",
+            backgroundColor:    "rgb(0, 87, 163)",
+            foregroundColor:    "rgb(255, 255, 255)",
+            labelColor:         "rgb(200, 220, 255)",
+            expirationDate:     expiry.toISOString(),
+            barcodes: [{
+                message:         qrCode,
+                format:          "PKBarcodeFormatQR",
+                messageEncoding: "iso-8859-1",
+                altText:         String(ticketId),
+            }],
+            generic: {
+                primaryFields: [
+                    { key: "tariffa", label: "TARIFFA", value: tariffa },
+                ],
+                secondaryFields: [
+                    { key: "prezzo", label: "PREZZO",
+                      value: prezzo ? `€ ${parseFloat(prezzo).toFixed(2)}` : "" },
+                ],
+                auxiliaryFields: [
+                    { key: "scadenza", label: "SCADE ALLE",
+                      value: expiry.toISOString(),
+                      dateStyle: "PKDateStyleNone",
+                      timeStyle: "PKDateStyleShort",
+                      isRelative: true },
+                ],
+                backFields: [
+                    { key: "info", label: "CONDIZIONI",
+                      value: "Biglietto valido per una corsa. Mostrare al controllore. Non cedibile." },
+                    { key: "contatti", label: "CONTATTI",
+                      value: "VCO Trasporti S.r.l.\nTel: 0323 518611\nwww.vcotrasporti.it" },
+                ],
+            },
+        };
+
         const pass = new PKPass(
             {
+                "pass.json":   Buffer.from(JSON.stringify(passJson)),
                 "logo.png":    fs.readFileSync(path.join(__dirname, "images", "logo.png")),
                 "logo@2x.png": fs.readFileSync(path.join(__dirname, "images", "logo@2x.png")),
                 "icon.png":    fs.readFileSync(path.join(__dirname, "images", "icon.png")),
                 "icon@2x.png": fs.readFileSync(path.join(__dirname, "images", "icon@2x.png")),
             },
-            {
-                wwdr:                fs.readFileSync(path.join(__dirname, "certs", "wwdr.pem")),
-                signerCert:          fs.readFileSync(path.join(__dirname, "certs", "VCOPassCertificate.p12")),
-                signerKey:           fs.readFileSync(path.join(__dirname, "certs", "VCOPassCertificate.p12")),
-                signerKeyPassphrase: P12_PASSWORD,
-            },
-            {
-                formatVersion:       1,
-                passTypeIdentifier:  PASS_TYPE_ID,
-                serialNumber:        ticketId,
-                teamIdentifier:      TEAM_ID,
-                organizationName:    "VCO Trasporti",
-                description:         "Biglietto VCO Trasporti",
-                logoText:            "VCO Trasporti",
-                backgroundColor:     "rgb(0, 87, 163)",
-                foregroundColor:     "rgb(255, 255, 255)",
-                labelColor:          "rgb(200, 220, 255)",
-                expirationDate:      expiry.toISOString(),
-                barcodes: [{
-                    message:         qrCode,
-                    format:          "PKBarcodeFormatQR",
-                    messageEncoding: "iso-8859-1",
-                    altText:         ticketId,
-                }],
-                generic: {
-                    primaryFields: [{
-                        key: "tariffa", label: "TARIFFA", value: tariffa
-                    }],
-                    secondaryFields: [{
-                        key: "prezzo", label: "PREZZO",
-                        value: prezzo ? `€ ${parseFloat(prezzo).toFixed(2)}` : ""
-                    }],
-                    auxiliaryFields: [{
-                        key: "scadenza", label: "SCADE ALLE",
-                        value: expiry.toISOString(),
-                        dateStyle: "PKDateStyleNone",
-                        timeStyle: "PKDateStyleShort",
-                        isRelative: true,
-                    }],
-                    backFields: [
-                        { key: "info", label: "CONDIZIONI",
-                          value: "Biglietto valido per una corsa. Mostrare al controllore. Non cedibile." },
-                        { key: "contatti", label: "CONTATTI",
-                          value: "VCO Trasporti S.r.l.\nTel: 0323 518611\nwww.vcotrasporti.it" }
-                    ]
-                }
-            }
+            CERTIFICATI,
+            {}
         );
 
         const buffer = pass.getAsBuffer();
