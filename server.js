@@ -49,7 +49,13 @@ try {
     console.error("ERRORE caricamento certificati:", e.message);
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, certs: !!CERTIFICATI, error: CERT_ERROR }));
+app.get("/health", (req, res) => res.json({
+    ok: true,
+    certs: !!CERTIFICATI,
+    error: CERT_ERROR,
+    pwFonte: process.env.P12_PASSWORD ? "env" : "default",
+    pwLunghezza: (process.env.P12_PASSWORD || "vcotrasporti").length
+}));
 
 app.post("/genera-pass", async (req, res) => {
     try {
