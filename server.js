@@ -30,6 +30,7 @@ app.post("/genera-pass", async (req, res) => {
                 "icon@2x.png": fs.readFileSync(path.join(__dirname, "images", "icon@2x.png")),
             },
             {
+                wwdr:                fs.readFileSync(path.join(__dirname, "certs", "wwdr.pem")),
                 signerCert:          fs.readFileSync(path.join(__dirname, "certs", "VCOPassCertificate.p12")),
                 signerKey:           fs.readFileSync(path.join(__dirname, "certs", "VCOPassCertificate.p12")),
                 signerKeyPassphrase: P12_PASSWORD,
