@@ -2,40 +2,22 @@ const express = require("express");
 const { PKPass } = require("passkit-generator");
 const fs = require("fs");
 const path = require("path");
-const forge = require("node-forge");
 
 const app = express();
 app.use(express.json());
 
 const PASS_TYPE_ID = "pass.com.byds.vcotrasporti";
 const TEAM_ID      = "S6C4FQLMT5";
-const P12_PASSWORD = process.env.P12_PASSWORD || "vcotrasporti";
+// Passphrase usata quando hai esportato signerKey.pem con openssl
+const KEY_PASSPHRASE = process.env.KEY_PASSPHRASE || "vcotrasporti";
 
-// --- Certificati: estrae signerCert + signerKey (PEM) dal .p12 una sola volta ---
-// passkit-generator NON accetta il .p12 grezzo: vuole certificato e chiave in PEM.
-// node-forge li estrae dal VCOPassCertificate.p12 che hai già nel repo.
+// Legge i PEM direttamente — niente node-forge, niente problemi di formato .p12
 function caricaCertificati() {
-    const p12Buffer = fs.readFileSync(path.join(__dirname, "certs", "VCOPassCertificate.p12"));
-    const p12Asn1 = forge.asn1.fromDer(forge.util.createBuffer(p12Buffer.toString("binary")));
-    const p12 = forge.pkcs12.pkcs12FromAsn1(p12Asn1, P12_PASSWORD);
-
-    const certBags = p12.getBags({ bagType: forge.pki.oids.certBag })[forge.pki.oids.certBag];
-    if (!certBags || !certBags.length) throw new Error("Nessun certificato nel .p12");
-    const signerCert = forge.pki.certificateToPem(certBags[0].cert);
-
-    let keyBags = p12.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag })[forge.pki.oids.pkcs8ShroudedKeyBag];
-    if (!keyBags || !keyBags.length) {
-        keyBags = p12.getBags({ bagType: forge.pki.oids.keyBag })[forge.pki.oids.keyBag];
-    }
-    if (!keyBags || !keyBags.length) throw new Error("Nessuna chiave privata nel .p12");
-    const KEY_PASS = "vco-internal-key-pass";
-    const signerKey = forge.pki.encryptRsaPrivateKey(keyBags[0].key, KEY_PASS);
-
     return {
         wwdr:                fs.readFileSync(path.join(__dirname, "certs", "wwdr.pem")),
-        signerCert,
-        signerKey,
-        signerKeyPassphrase: KEY_PASS,
+        signerCert:          fs.readFileSync(path.join(__dirname, "certs", "signerCert.pem")),
+        signerKey:           fs.readFileSync(path.join(__dirname, "certs", "signerKey.pem")),
+        signerKeyPassphrase: KEY_PASSPHRASE,
     };
 }
 
@@ -43,7 +25,7 @@ let CERTIFICATI;
 let CERT_ERROR = null;
 try {
     CERTIFICATI = caricaCertificati();
-    console.log("Certificati caricati dal .p12 con successo.");
+    console.log("Certificati caricati con successo.");
 } catch (e) {
     CERT_ERROR = e.message;
     console.error("ERRORE caricamento certificati:", e.message);
@@ -52,9 +34,7 @@ try {
 app.get("/health", (req, res) => res.json({
     ok: true,
     certs: !!CERTIFICATI,
-    error: CERT_ERROR,
-    pwFonte: process.env.P12_PASSWORD ? "env" : "default",
-    pwLunghezza: (process.env.P12_PASSWORD || "vcotrasporti").length
+    error: CERT_ERROR
 }));
 
 app.post("/genera-pass", async (req, res) => {
