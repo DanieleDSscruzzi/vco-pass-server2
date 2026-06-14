@@ -1,0 +1,13 @@
+{
+  "name": "vco-pass-server",
+  "version": "1.0.0",
+  "description": "VCO Trasporti - Apple Wallet pass server (By D.S.)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "passkit-generator": "^3.5.7"
+  }
+}
